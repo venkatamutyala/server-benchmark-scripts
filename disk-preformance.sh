@@ -2,15 +2,16 @@
 #
 # Hard Drive / SSD Endurance Benchmark Script using 'fio'
 #
-# VERSION 5: INTERACTIVE DRIVE SELECTION
+# VERSION 6: ROBUST DRIVE DETECTION & MENU
 #
-# This version adds a menu to automatically detect and select a drive
-# to test, making it easier to use on systems with multiple disks.
+# This version improves drive detection to include LVM volumes (e.g., /dev/mapper)
+# and replaces the 'select' menu with a more reliable 'read' prompt to prevent
+# issues in certain terminal environments.
 #
 # PREREQUISITES:
 # You must have 'fio' installed.
 #   - On Debian/Ubuntu: sudo apt-get update && sudo apt-get install -y fio
-#   - On CentOS/RHEL:   sudo yum install -y fiofio
+#   - On CentOS/RHEL:   sudo yum install -y fio
 #   - On macOS:         brew install fio
 #
 # --- VERY IMPORTANT WARNING ---
@@ -45,9 +46,9 @@ fi
 # --- Drive Selection Menu ---
 echo "Detecting available drives..."
 
-# Use df to find block devices and format them for the menu
-# We store the full descriptive line for the menu in one array, and just the mount point in another.
-mapfile -t mount_info < <(df -hTP | awk 'NR>1 && ($1 ~ /^\/dev\/(sd|nvme|vd|hd)/) {printf "%s (%s, %s, %s free)\n", $7, $1, $2, $4}')
+# Use df to find block devices and format them for the menu.
+# Added 'mapper' to the regex to include LVM volumes.
+mapfile -t mount_info < <(df -hTP | awk 'NR>1 && ($1 ~ /^\/dev\/(sd|nvme|vd|hd|mapper)/) {printf "%s (%s, %s, %s free)\n", $7, $1, $2, $4}')
 
 if [ ${#mount_info[@]} -eq 0 ]; then
     echo "Error: No suitable drives found to test (e.g., /dev/sda, /dev/nvme0n1)."
@@ -56,19 +57,33 @@ if [ ${#mount_info[@]} -eq 0 ]; then
 fi
 
 echo "Please select the drive you want to benchmark:"
-select opt in "${mount_info[@]}" "Quit"; do
-    if [[ "$opt" == "Quit" ]]; then
-        echo "Exiting."
-        exit 0
-    elif [[ -n "$opt" ]]; then
-        # The mount point is the first field of the selected option string
-        TARGET_DIR=$(echo "$opt" | awk '{print $1}')
-        echo "You have selected the drive mounted at: $TARGET_DIR"
-        break
-    else
-        echo "Invalid option. Please try again."
-    fi
+# Manually print options with numbers
+for i in "${!mount_info[@]}"; do
+    printf "  %d) %s\n" "$((i+1))" "${mount_info[$i]}"
 done
+# Add a quit option
+quit_option=$((${#mount_info[@]}+1))
+printf "  %d) Quit\n" "$quit_option"
+
+# Read user input using a more robust 'read' command
+read -p "Enter your choice [1-$quit_option]: " choice
+
+# Validate the choice
+if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le "${#mount_info[@]}" ]; then
+    # A valid drive was selected
+    opt="${mount_info[$((choice-1))]}"
+    TARGET_DIR=$(echo "$opt" | awk '{print $1}')
+    echo "You have selected the drive mounted at: $TARGET_DIR"
+elif [[ "$choice" == "$quit_option" ]]; then
+    # Quit was selected
+    echo "Exiting."
+    exit 0
+else
+    # Invalid choice
+    echo "Invalid option. Exiting."
+    exit 1
+fi
+
 
 # The name of the test file, now based on the selected TARGET_DIR.
 TEST_FILE="$TARGET_DIR/fio-benchmark-testfile"
